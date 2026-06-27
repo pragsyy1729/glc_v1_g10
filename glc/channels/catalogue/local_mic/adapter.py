@@ -9,6 +9,7 @@ from typing import Any
 
 from glc.channels.base import ChannelAdapter
 from glc.channels.envelope import ChannelMessage, ChannelReply
+from glc.security.allowlists import allowed
 from glc.security.trust_level import classify
 from glc.voice.stt import router as stt_router
 from glc.voice.tts import router as tts_router
@@ -36,8 +37,10 @@ class Adapter(ChannelAdapter):
 
         trust_level = classify("local_mic", speaker_id)
 
-        if self.config.get("is_public_channel") and trust_level == "untrusted":
-            return None
+        if self.config.get("is_public_channel"):
+            ok, _ = allowed("local_mic", speaker_id, is_public_channel=True)
+            if not ok:
+                return None
 
         result = await stt_router.transcribe(wav_bytes, "audio/wav")
 
