@@ -6,7 +6,10 @@ import base64
 import hashlib
 import math
 import struct
+import subprocess
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from glc.channels.base import ChannelAdapter
@@ -36,6 +39,18 @@ def _is_silent(wav_bytes: bytes) -> bool:
     samples = struct.unpack(f"<{n}h", payload[: n * 2])
     rms = math.sqrt(sum(s * s for s in samples) / n) / 32767
     return rms < _SILENCE_THRESHOLD
+
+
+def _play_audio(audio_bytes: bytes, mime: str) -> None:
+    """Play audio bytes through the system speaker. macOS uses afplay."""
+    suffix = ".aiff" if "aiff" in mime else ".wav"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        tmp.write_bytes(audio_bytes)
+        subprocess.run(["afplay", str(tmp)], check=True)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 class Adapter(ChannelAdapter):
@@ -84,10 +99,13 @@ class Adapter(ChannelAdapter):
         if mock is not None and mock.rate_limited:
             return {"status": 429, "error": "tts rate limit"}
 
-        tts_result = await tts_router.synthesize(reply.text or "")
+        prefer = self.config.get("tts_prefer", "fallback")
+        tts_result = await tts_router.synthesize(reply.text or "", prefer=prefer)  # type: ignore[call-arg]
         audio_bytes = base64.b64decode(tts_result.audio_b64)
 
         if mock is not None:
             await mock.play(audio_bytes)
+        else:
+            _play_audio(audio_bytes, tts_result.mime)
 
         return {"status": 200}
