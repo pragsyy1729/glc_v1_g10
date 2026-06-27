@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
+import struct
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +17,25 @@ from glc.voice.stt import router as stt_router
 from glc.voice.tts import router as tts_router
 
 _WAV_HEADER_BYTES = 44
+_SILENCE_THRESHOLD = 0.01  # normalized RMS below this is treated as silence
+
+
+def _is_silent(wav_bytes: bytes) -> bool:
+    """RMS energy VAD on 16-bit mono PCM payload.
+
+    Works for both synthetic silence (all-zero samples from mock) and
+    real microphone recordings where background noise produces non-zero
+    bytes even in a quiet room.
+    """
+    payload = wav_bytes[_WAV_HEADER_BYTES:]
+    if not payload:
+        return True
+    n = len(payload) // 2  # number of 16-bit samples
+    if n == 0:
+        return True
+    samples = struct.unpack(f"<{n}h", payload[: n * 2])
+    rms = math.sqrt(sum(s * s for s in samples) / n) / 32767
+    return rms < _SILENCE_THRESHOLD
 
 
 class Adapter(ChannelAdapter):
@@ -30,9 +51,7 @@ class Adapter(ChannelAdapter):
         speaker_id: str = raw["speaker_id"]
         speaker_handle: str = raw["speaker_handle"]
 
-        # VAD: skip 44-byte WAV header, check audio payload for silence
-        audio_payload = wav_bytes[_WAV_HEADER_BYTES:]
-        if audio_payload and all(b == 0 for b in audio_payload[:200]):
+        if _is_silent(wav_bytes):
             return None
 
         trust_level = classify("local_mic", speaker_id)
